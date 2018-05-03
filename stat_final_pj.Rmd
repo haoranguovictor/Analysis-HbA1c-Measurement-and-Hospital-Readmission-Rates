@@ -1,0 +1,604 @@
+---
+title: "Final_project EES6690 Columbia University -- Haoran Guo (hg2461), Hao Fang (hg2345)"
+output: pdf_document
+---
+
+```{r}
+library(GGally)
+library(ggplot2)
+library(corrplot)
+library(psych)
+library(lasso2)
+library(dplyr)
+library(proto)
+library(RSQLite)
+library(gsubfn)
+library(sqldf)
+library(lattice)
+library(survival)
+library(grid)
+library(Matrix)
+library(survey)
+library(caret)
+library(rpart)
+library(randomForest)
+library(e1071)
+library(nnet)
+library(CORElearn)
+```
+
+Loading Data
+
+```{r}
+filename = 'C:\\Users\\guohr\\Desktop\\readm_pre\\diabetic_data.csv'
+filename2 = 'C:\\Users\\guohr\\Desktop\\stat proj\\dataset_diabetes\\diabetic_data.csv'
+data = read.table(filename2, sep = ",", header = T, na.strings = "?")
+nrow(data)
+```
+
+Dropping some columns
+
+```{r}
+data = select(data, -encounter_id,  -weight,-payer_code, -(25:41),-(43:47))
+```
+
+Adding missing value
+
+```{r}
+levels <- levels(data$race)
+levels[length(levels) + 1] <- "Missing"
+
+# refactor Species to include "Missing" as a factor level
+# and replace NA with "None"
+data$race <- factor(data$race, levels = levels)
+data$race[is.na(data$race)] <- "Missing"
+
+any(is.na(data$medical_specialty)) # false
+
+levels <- levels(data$medical_specialty)
+levels[length(levels) + 1] <- "Missing"
+
+data$medical_specialty <- factor(data$medical_specialty, levels = levels)
+data$medical_specialty[is.na(data$medical_specialty)] <- "Missing"
+
+any(is.na(data$medical_specialty)) # false
+```
+
+Preliminary data analysis
+
+```{r}
+
+plot(data$race, main = "race")
+# PLOTS
+
+# variable distributions
+plot(data$age, main = "age distribution") 
+plot(data$gender, main = "gender distribution") 
+
+plot(data$readmitted, main = "readmissions") 
+
+g <- ggplot(data, aes(x=age, y=time_in_hospital))
+g + geom_boxplot(aes(fill=readmitted))
+
+g <- ggplot(data,aes(x=A1Cresult, y=time_in_hospital))
+g + geom_boxplot(aes(fill=diabetesMed)) + facet_grid(. ~ readmitted)
+
+g <- ggplot(data,aes(x=age, y=num_medications))
+g + geom_boxplot(aes(fill=age))
+```
+
+
+Preprocessing data with RSQL, merging classes of A1Cresult and readmitted, also filter out istances with discharge_disposition_id
+
+```{r}
+data = sqldf("select *, count(distinct patient_nbr) as a from data where discharge_disposition_id not in (11, 13, 14, 19, 20, 21) group by patient_nbr")
+
+data = sqldf("select case A1Cresult when '>7' then 'Norm' when '>8' then 'High' else A1Cresult end as HbA1c, case readmitted when '<30' then 1 else 0 end as Readmit, * from data")
+
+data = select(data, -readmitted, -patient_nbr, -a, -A1Cresult, -num_lab_procedures)
+```
+
+Preprocessing data
+
+Handling with 3 times' diganosis and also medical_speciality(Surgery)
+
+```{r}
+
+data = sqldf("select case when diag_3 between 250 and 251 then 'Diabetes' when diag_3 between 390 and 459 then 'Circulatory' when diag_3==785 then 'Circulatory' when diag_3 between 460 and 519 then 'Respiratory' when diag_3==786 then 'Respiratory' when diag_3 between 520 and 579 then 'Digestive' when diag_3==787 then 'Digestive' when diag_3 between 800 and 999 then 'Injury' when diag_3 between 710 and 739 then 'Musculoskeletal' when diag_3 between 580 and 629 then 'Genitourinary' when diag_3==788 then 'Genitourinary' when diag_3 between 140 and 239 then 'Neoplasms' else 'Others' end as Diag3, * from data")
+
+data = sqldf("select case when diag_2 between 250 and 251 then 'Diabetes' when diag_2 between 390 and 459 then 'Circulatory' when diag_2==785 then 'Circulatory' when diag_2 between 460 and 519 then 'Respiratory' when diag_2==786 then 'Respiratory' when diag_2 between 520 and 579 then 'Digestive' when diag_2==787 then 'Digestive' when diag_2 between 800 and 999 then 'Injury' when diag_2 between 710 and 739 then 'Musculoskeletal' when diag_2 between 580 and 629 then 'Genitourinary' when diag_2==788 then 'Genitourinary' when diag_2 between 140 and 239 then 'Neoplasms' else 'Others' end as Diag2, * from data")
+
+data = sqldf("select case when diag_1 between 250 and 251 then 'Diabetes' when diag_1 between 390 and 459 then 'Circulatory' when diag_1==785 then 'Circulatory' when diag_1 between 460 and 519 then 'Respiratory' when diag_1==786 then 'Respiratory' when diag_1 between 520 and 579 then 'Digestive' when diag_1==787 then 'Digestive' when diag_1 between 800 and 999 then 'Injury' when diag_1 between 710 and 739 then 'Musculoskeletal' when diag_1 between 580 and 629 then 'Genitourinary' when diag_1==788 then 'Genitourinary' when diag_1 between 140 and 239 then 'Neoplasms' else 'Others' end as Diag1, * from data")
+
+data = sqldf("select case when medical_specialty like 'Surgery%' then 'Surgery' else medical_specialty end as MedicalSpeciality, * from data ")
+
+data$MedicalSpeciality <- as.factor(data$MedicalSpeciality)
+data = select(data, -medical_specialty)
+
+# Make a copy of dataframe
+data_full = data
+```
+
+Further statistical exploration of dataset
+
+```{r}
+# Factorize some columns in data
+data$Readmit <- as.factor(data$Readmit)
+data$race <- as.factor(data$race)
+data$Diag1 <- as.factor(data$Diag1)
+data$Diag2 <- as.factor(data$Diag2)
+data$Diag3 <- as.factor(data$Diag3)
+data$HbA1c <- as.factor(data$HbA1c)
+data$MedicalSpeciality <-as.factor(data$MedicalSpeciality)
+
+plot(data$Readmit, main="Readmit")
+plot(data$MedicalSpeciality, main="Medical Speciality")
+ggplot(data)+geom_bar(width=1, aes(x=factor(1),fill=data$Readmit))+coord_polar(theta="y") 
+plot(data$HbA1c)
+ggplot(data)+geom_bar(width=1, aes(x=factor(1),fill=data$HbA1c))+coord_polar(theta="y")  
+plot(data$Diag1)
+ggplot(data)+geom_bar(width=1, aes(x=factor(1),fill=data$Diag1))+coord_polar(theta="y")
+ggplot(data)+geom_bar(width=1, aes(x=factor(1),fill=data$Diag2))+coord_polar(theta="y")
+ggplot(data)+geom_bar(width=1, aes(x=factor(1),fill=data$Diag3))+coord_polar(theta="y")
+g <- ggplot(data,aes(x=Diag1, y=time_in_hospital))
+g + geom_boxplot(aes(fill=Diag1))
+```
+
+Further data cleaning, remove some columns, merge column HbA1c & change to 'Reaction'
+
+```{r}
+data = select(data, -diag_1, -diag_2, -diag_3, -admission_source_id, -num_procedures, -num_medications, -number_outpatient, -number_emergency, -number_inpatient)
+
+data = select(data, -Diag2, -Diag3, -number_diagnoses, -max_glu_serum, -insulin, -diabetesMed)
+
+data = sqldf("select case when HbA1c is 'High' and change is 'Ch' then 'High&Ch' when HbA1c is 'High' and change is 'No' then 'High&Not' else HbA1c end as Reaction, Diag1 as Pri_diag, * from data")
+
+# Factorize
+data$Reaction <- as.factor(data$Reaction)
+data$race <- as.factor(data$race)
+data$discharge_disposition_id <- as.factor(data$discharge_disposition_id)
+data$admission_type_id <- as.factor(data$admission_type_id)
+
+# Remove duplicates
+data = select(data, -Diag1, -HbA1c, -change)
+```
+
+Correlation of numeric factors
+
+```{r}
+#data[is.na(data)] <- 0
+#summary(data)
+#data[] <- lapply(data, function(x) {
+#    if(is.factor(x)) as.numeric(as.character(x)) else x
+#})
+#sapply(data, class)
+
+#c <- cor(data[], use= "pairwise.complete.obs")
+#corrplot(c)
+
+# p = ggpairs(data_simp)
+# p_ <- GGally::print_if_interactive
+# data_simp[] <- lapply(data_simp, function(x) {
+#     if(is.factor(x)) as.numeric(as.character(x)) else x
+# })
+# sapply(data_simp, class)
+# p_(p)
+
+# Bad result!
+
+```
+
+Quick PCA with numeric variables
+
+```{r}
+# y <- select(data, Readmit)
+# X <- select(data, time_in_hospital, num_procedures, 
+#             number_outpatient, number_emergency, number_inpatient, number_diagnoses,
+#             max_glu_serum, insulin, change)
+# # no rotation
+# pca_noRot <- principal(X, nfactors = 5, rotate = "none")
+# rotation2_noRot <- data.frame(cbind(pca_noRot$score, y))
+# head(rotation2_noRot)
+# pca_noRot$loadings
+```
+
+pc1 number of medications and time in hosptial
+pc2 number of in-patient visits and emergency
+pc3 number of procedures
+pc4 number of out-patient visits
+pc5 number of diagnoses
+
+Logit regression
+
+```{r}
+logisticPseudoR2s <- function(LogModel) {
+  dev <- LogModel$deviance 
+  nullDev <- LogModel$null.deviance 
+  modelN <-  length(LogModel$fitted.values)
+  R.l <-  1 -  dev / nullDev
+  R.cs <- 1- exp ( -(nullDev - dev) / modelN)
+  R.n <- R.cs / ( 1 - ( exp (-(nullDev / modelN))))
+  cat("Pseudo R^2 for logistic regression\n")
+  cat("Hosmer and Lemeshow R^2  ", round(R.l, 3), "\n")
+  cat("Cox and Snell R^2        ", round(R.cs, 3), "\n")
+  cat("Nagelkerke R^2           ", round(R.n, 3),    "\n")
+}
+```
+
+Chisq test, select important factors (Gender could be dropped)
+
+```{r}
+# anova(linModel_noRot, test="Chisq")
+# 
+#                          Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+# NULL                                     69989      27608              
+# Reaction                  3    10.73     69986      27598 0.0132927 *  
+# Pri_diag                  8    31.23     69978      27566 0.0001279 ***
+# MedicalSpeciality        58   244.94     69920      27321 < 2.2e-16 ***
+# race                      5    88.91     69915      27233 < 2.2e-16 ***
+# gender                    2     0.69     69913      27232 0.7099052    
+# age                       9   160.53     69904      27071 < 2.2e-16 ***
+# admission_type_id         7   174.54     69897      26897 < 2.2e-16 ***
+# discharge_disposition_id 20   701.57     69877      26195 < 2.2e-16 ***
+# time_in_hospital          1    21.16     69876      26174 4.218e-06 ***
+# ---
+# Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+```
+
+Data Merging
+
+```{r}
+#summary(data2)
+data2 = data
+#library(sqldf)
+data2$race<- as.factor(data2$race)
+data2 = select(data2, -gender)
+data2 = sqldf("select case discharge_disposition_id when 1 then 'Home' else 'Other' end as Discharge, * from data2")
+data2 = sqldf("select case admission_type_id when 1 or 2 then 'Emergency' when 7 then 'referral' else 'Other' end as Admission, * from data2")
+data2 = sqldf("select case race when 'AfricanAmerican' then 'AfricanAmerican' when 'Caucasian' then 'Caucasian' when 'Missing' then 'Missing' else 'Other' end as race_, * from data2")
+data2 = sqldf("select case age when '[30-40)' then '[30, 60)' when '[40-50)' then '[30, 60)' when '[50-60)' then '[30, 60)' when '[0-10)' then '<30' when '[10-20)' then '<30' when '[20, 30)' then '<30' else '[60, 100)' end as Age_, * from data2")
+data2 = sqldf("select case MedicalSpeciality when 'Missing' then 'Missing' when 'Cardiology' then 'Cardiology' when 'Family/GeneralPractice' then 'GeneralPractice' when 'InternalMedicine' then 'InternalMedicine' when 'Surgery' then 'Surgery' else 'Other' end as Medical_speciality, * from data2")
+data2$race_<-as.factor(data2$race_)
+data2$Admission<-as.factor(data2$Admission)
+data2$Discharge<-as.factor(data2$Discharge)
+data2$Pri_diag <- as.factor(data2$Pri_diag)
+data2$Age_ <- as.factor(data2$Age_)
+data2$Medical_speciality <- as.factor(data2$Medical_speciality)
+data2 = select(data2, -race, -admission_type_id, -discharge_disposition_id, -age, -MedicalSpeciality)
+summary(data2)
+```
+
+Relevel for references
+
+```{r}
+data2$race_ <- relevel(data2$race_, ref = 'AfricanAmerican')
+data2$Reaction <- relevel(data2$Reaction, ref = 'None')
+data2$Pri_diag <- relevel(data2$Pri_diag, ref = 'Diabetes')
+```
+
+Basic model, order-one
+
+```{r}
+linModel_no2 <- glm(Readmit ~ . , data2, family = binomial)
+#summary(linModel_no2)
+
+# Coefficients:
+#                                     Estimate Std. Error z value Pr(>|z|)    
+# (Intercept)                        -3.720905   0.116511 -31.936  < 2e-16 ***
+# Medical_specialityGeneralPractice   0.037285   0.102993   0.362 0.717339    
+# Medical_specialityInternalMedicine  0.299026   0.089461   3.343 0.000830 ***
+# Medical_specialityMissing           0.014635   0.083602   0.175 0.861037    
+# Medical_specialityOther            -0.285336   0.093223  -3.061 0.002207 ** 
+# Medical_specialitySurgery          -0.079796   0.112335  -0.710 0.477490    
+# Age_[60, 100)                       0.348403   0.044247   7.874 3.43e-15 ***
+# Age_<30                            -0.314197   0.277667  -1.132 0.257819    
+# race_Caucasian                      0.344032   0.052194   6.591 4.36e-11 ***
+# race_Missing                       -0.114495   0.137427  -0.833 0.404768    
+# race_Other                          0.371437   0.096633   3.844 0.000121 ***
+# AdmissionOther                     -0.006926   0.038174  -0.181 0.856024    
+# Admissionreferral                  -9.825065  80.300762  -0.122 0.902619    
+# DischargeOther                      0.511007   0.038326  13.333  < 2e-16 ***
+# ReactionHigh&Ch                    -0.088169   0.082880  -1.064 0.287413    
+# ReactionHigh&Not                   -0.181984   0.118067  -1.541 0.123230    
+# ReactionNorm                       -0.127005   0.062829  -2.021 0.043234 *  
+# Pri_diagCirculatory                -0.153162   0.070793  -2.164 0.030500 *  
+# Pri_diagDigestive                  -0.272778   0.087827  -3.106 0.001897 ** 
+# Pri_diagGenitourinary              -0.297167   0.102871  -2.889 0.003868 ** 
+# Pri_diagInjury                     -0.031670   0.087207  -0.363 0.716487    
+# Pri_diagMusculoskeletal            -0.238246   0.102064  -2.334 0.019581 *  
+# Pri_diagNeoplasms                  -0.104240   0.110581  -0.943 0.345857    
+# Pri_diagOthers                     -0.135494   0.074824  -1.811 0.070168 .  
+# Pri_diagRespiratory                -0.268682   0.079986  -3.359 0.000782 ***
+# time_in_hospital                    0.039181   0.005803   6.752 1.46e-11 ***
+# ---
+# Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+```
+
+Select all pairwise attributes to train a logit model
+
+```{r}
+#linModel_no4 <- glm(Readmit ~ .^2 , data2, family = binomial)
+#summary(linModel_no4)
+```
+
+Reserve the important pairwise attributes and train model
+We found Age_*Medical_speciality useless, dropped.
+```{r}
+linModel_core_num <- glm(Readmit ~ Discharge + race_ + Admission + Medical_speciality + time_in_hospital + Age_ + Pri_diag + Reaction +
+                      Pri_diag*Discharge + race_*Discharge 
+                     + Discharge*time_in_hospital + Medical_speciality*Discharge 
+                     + time_in_hospital*Medical_speciality  
+                     + time_in_hospital* Pri_diag + Reaction*Pri_diag,
+                       data = data2, family = binomial)
+# summary(linModel_core_num)
+
+# Coefficients:
+#                                                      Estimate Std. Error z value Pr(>|z|)    
+# (Intercept)                                         -4.145212   0.197483 -20.990  < 2e-16 ***
+# DischargeOther                                       0.901349   0.244866   3.681 0.000232 ***
+# race_Caucasian                                       0.437519   0.074212   5.895 3.74e-09 ***
+# race_Missing                                        -0.296718   0.210110  -1.412 0.157891    
+# race_Other                                           0.302575   0.135545   2.232 0.025596 *  
+# AdmissionOther                                      -0.005596   0.038397  -0.146 0.884123    
+# Admissionreferral                                   -9.784584  80.554871  -0.121 0.903323    
+# Medical_specialityGeneralPractice                    0.401829   0.188392   2.133 0.032930 *  
+# Medical_specialityInternalMedicine                   0.500129   0.157556   3.174 0.001502 ** 
+# Medical_specialityMissing                            0.363802   0.144066   2.525 0.011562 *  
+# Medical_specialityOther                             -0.297803   0.169253  -1.760 0.078490 .  
+# Medical_specialitySurgery                            0.256724   0.213291   1.204 0.228732    
+# time_in_hospital                                     0.136690   0.032557   4.198 2.69e-05 ***
+# Age_[60, 100)                                        0.339596   0.044287   7.668 1.75e-14 ***
+# Age_<30                                             -0.157528   0.282762  -0.557 0.577455    
+# Pri_diagCirculatory                                 -0.037004   0.138808  -0.267 0.789787    
+# Pri_diagDigestive                                   -0.342643   0.171152  -2.002 0.045287 *  
+# Pri_diagGenitourinary                               -0.322777   0.202376  -1.595 0.110725    
+# Pri_diagInjury                                      -0.009665   0.185387  -0.052 0.958422    
+# Pri_diagMusculoskeletal                             -0.703889   0.238734  -2.948 0.003194 ** 
+# Pri_diagNeoplasms                                    0.221054   0.216383   1.022 0.306976    
+# Pri_diagOthers                                      -0.027303   0.148768  -0.184 0.854386    
+# Pri_diagRespiratory                                 -0.425242   0.157461  -2.701 0.006921 ** 
+# ReactionHigh&Ch                                     -0.750748   0.215940  -3.477 0.000508 ***
+# ReactionHigh&Not                                    -0.531529   0.295624  -1.798 0.072178 .  
+# ReactionNorm                                        -0.207005   0.211000  -0.981 0.326560    
+# DischargeOther:Pri_diagCirculatory                  -0.051205   0.145939  -0.351 0.725688    
+# DischargeOther:Pri_diagDigestive                     0.139439   0.183223   0.761 0.446636    
+# DischargeOther:Pri_diagGenitourinary                -0.243134   0.213656  -1.138 0.255133    
+# DischargeOther:Pri_diagInjury                        0.095687   0.187207   0.511 0.609261    
+# DischargeOther:Pri_diagMusculoskeletal               0.453188   0.234151   1.935 0.052935 .  
+# DischargeOther:Pri_diagNeoplasms                    -0.125321   0.228869  -0.548 0.583991    
+# DischargeOther:Pri_diagOthers                        0.348167   0.154750   2.250 0.024457 *  
+# DischargeOther:Pri_diagRespiratory                   0.253834   0.165773   1.531 0.125716    
+# DischargeOther:race_Caucasian                       -0.186434   0.103542  -1.801 0.071773 .  
+# DischargeOther:race_Missing                          0.331627   0.278537   1.191 0.233809    
+# DischargeOther:race_Other                            0.190659   0.193892   0.983 0.325447    
+# DischargeOther:time_in_hospital                     -0.036059   0.011828  -3.049 0.002299 ** 
+# DischargeOther:Medical_specialityGeneralPractice    -0.121850   0.223700  -0.545 0.585959    
+# DischargeOther:Medical_specialityInternalMedicine   -0.121562   0.196055  -0.620 0.535230    
+# DischargeOther:Medical_specialityMissing            -0.362101   0.184227  -1.966 0.049355 *  
+# DischargeOther:Medical_specialityOther              -0.007635   0.205228  -0.037 0.970325    
+# DischargeOther:Medical_specialitySurgery             0.503798   0.245500   2.052 0.040157 *  
+# Medical_specialityGeneralPractice:time_in_hospital  -0.071874   0.033733  -2.131 0.033116 *  
+# Medical_specialityInternalMedicine:time_in_hospital -0.037413   0.028476  -1.314 0.188901    
+# Medical_specialityMissing:time_in_hospital          -0.041631   0.026728  -1.558 0.119327    
+# Medical_specialityOther:time_in_hospital            -0.007006   0.029872  -0.235 0.814562    
+# Medical_specialitySurgery:time_in_hospital          -0.133988   0.038119  -3.515 0.000440 ***
+# time_in_hospital:Pri_diagCirculatory                -0.041732   0.021838  -1.911 0.056013 .  
+# time_in_hospital:Pri_diagDigestive                  -0.017480   0.027729  -0.630 0.528445    
+# time_in_hospital:Pri_diagGenitourinary               0.011861   0.033335   0.356 0.721985    
+# time_in_hospital:Pri_diagInjury                     -0.030957   0.027655  -1.119 0.262977    
+# time_in_hospital:Pri_diagMusculoskeletal             0.009490   0.036182   0.262 0.793098    
+# time_in_hospital:Pri_diagNeoplasms                  -0.072089   0.033778  -2.134 0.032824 *  
+# time_in_hospital:Pri_diagOthers                     -0.080533   0.022926  -3.513 0.000443 ***
+# time_in_hospital:Pri_diagRespiratory                -0.009011   0.024637  -0.366 0.714570    
+# Pri_diagCirculatory:ReactionHigh&Ch                  1.044042   0.250548   4.167 3.09e-05 ***
+# Pri_diagDigestive:ReactionHigh&Ch                    0.286802   0.507700   0.565 0.572139    
+# Pri_diagGenitourinary:ReactionHigh&Ch                0.819908   0.433084   1.893 0.058333 .  
+# Pri_diagInjury:ReactionHigh&Ch                       0.190152   0.509654   0.373 0.709075    
+# Pri_diagMusculoskeletal:ReactionHigh&Ch              0.880868   0.566935   1.554 0.120247    
+# Pri_diagNeoplasms:ReactionHigh&Ch                    0.249116   0.761235   0.327 0.743477    
+# Pri_diagOthers:ReactionHigh&Ch                       0.636597   0.299036   2.129 0.033268 *  
+# Pri_diagRespiratory:ReactionHigh&Ch                  0.791565   0.316789   2.499 0.012465 *  
+# Pri_diagCirculatory:ReactionHigh&Not                 0.441651   0.351824   1.255 0.209364    
+# Pri_diagDigestive:ReactionHigh&Not                   0.135432   0.591980   0.229 0.819042    
+# Pri_diagGenitourinary:ReactionHigh&Not               0.383801   0.666438   0.576 0.564684    
+# Pri_diagInjury:ReactionHigh&Not                      0.671458   0.555651   1.208 0.226888    
+# Pri_diagMusculoskeletal:ReactionHigh&Not             1.039674   0.610377   1.703 0.088506 .  
+# Pri_diagNeoplasms:ReactionHigh&Not                   1.523366   0.694452   2.194 0.028263 *  
+# Pri_diagOthers:ReactionHigh&Not                      0.010094   0.467974   0.022 0.982792    
+# Pri_diagRespiratory:ReactionHigh&Not                 0.387420   0.454992   0.851 0.394498    
+# Pri_diagCirculatory:ReactionNorm                     0.040582   0.238436   0.170 0.864851    
+# Pri_diagDigestive:ReactionNorm                       0.152586   0.322777   0.473 0.636408    
+# Pri_diagGenitourinary:ReactionNorm                   0.104212   0.366184   0.285 0.775959    
+# Pri_diagInjury:ReactionNorm                          0.015613   0.319722   0.049 0.961051    
+# Pri_diagMusculoskeletal:ReactionNorm                 0.133092   0.375174   0.355 0.722779    
+# Pri_diagNeoplasms:ReactionNorm                       0.347555   0.419031   0.829 0.406864    
+# Pri_diagOthers:ReactionNorm                          0.266480   0.249662   1.067 0.285807    
+# Pri_diagRespiratory:ReactionNorm                    -0.161596   0.278172  -0.581 0.561294    
+# ---
+# Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+```
+
+Chisq test
+
+```{r}
+# anova(linModel_core_num, test="Chisq")
+# 
+#                                     Df Deviance Resid. Df Resid. Dev  Pr(>Chi)    
+# NULL                                                69989      27608              
+# Discharge                            1   365.64     69988      27243 < 2.2e-16 ***
+# race_                                3    56.68     69985      27186 3.001e-12 ***
+# Admission                            2     6.11     69983      27180  0.047043 *  
+# Medical_speciality                   5    99.47     69978      27080 < 2.2e-16 ***
+# time_in_hospital                     1    50.42     69977      27030 1.243e-12 ***
+# Age_                                 2    69.32     69975      26961 8.844e-16 ***
+# Pri_diag                             8    22.74     69967      26938  0.003709 ** 
+# Reaction                             3     7.00     69964      26931  0.071785 .  
+# Discharge:Pri_diag                   8    25.27     69956      26906  0.001400 ** 
+# Discharge:race_                      3    11.16     69953      26894  0.010881 *  
+# Discharge:time_in_hospital           1     9.36     69952      26885  0.002214 ** 
+# Discharge:Medical_speciality         5    33.35     69947      26852 3.214e-06 ***
+# Medical_speciality:time_in_hospital  5    19.96     69942      26832  0.001271 ** 
+# time_in_hospital:Pri_diag            8    25.81     69934      26806  0.001132 ** 
+# Pri_diag:Reaction                   24    33.91     69910      26772  0.086257 . 
+
+# Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+```
+
+
+Test and Other Methods
+
+Comment: This data set is a super-unbalanced one, therefore accuracy of all these methods are meaningless. However, good to learn!
+
+Split data_full into train and test set
+
+```{r}
+data_full$Diag1 = as.factor(data_full$Diag1)
+data_full$Diag2 = as.factor(data_full$Diag2)
+data_full$Diag3 = as.factor(data_full$Diag3)
+data_full$HbA1c = as.factor(data_full$HbA1c)
+
+data_full = data2
+data_full$Readmit = as.factor(data_full$Readmit)
+colnames(data_full)
+
+set.seed(17)
+inTrain <- createDataPartition(y = data_full$Readmit, p = .60,list = FALSE)
+train <- data_full[inTrain,]
+test <- data_full[-inTrain,]
+nrow(train) 
+nrow(test) 
+```
+
+Test of logistic model
+```{r}
+test$pred_readmit <- predict(linModel_core_num, test, type="response")
+# test$pred_readmit = as.numeric(test$pred_readmit)
+# test$pred_readmit[test$pred_readmit>=0.5] <- 1
+# test$pred_readmit[test$pred_readmit<0.5] <- 0
+# test$pred_readmit = as.factor(as.integer(test$pred_readmit))
+summary(test$pred_readmit)
+# confusionMatrix(test$pred_readmit, test$Readmit)
+
+#Accuracy : 0.9505 
+
+#     Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+#1.600e-07 3.117e-02 4.695e-02 4.949e-02 6.434e-02 1.900e-01 
+
+```
+
+
+Random Forest
+
+```{r}
+# 
+#Rf_fit<-randomForest(formula=Readmit ~ Medical_speciality+Age_+race_+Admission+Discharge+Reaction+Pri_diag+Readmit+time_in_hospital,data=train)
+# Rf_fit<-randomForest(formula=Readmit ~ .,
+#                      data=train, ntree=500)
+# 
+# print(Rf_fit)
+# 
+# test$pred_readmit <- predict(Rf_fit, test, type = "response")
+# table(test$Readmit, test$pred_readmit)
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+
+# #importance(Rf_fit)
+```
+
+Naive Bayes
+
+```{r}
+# # build decision tree with naive Bayes in the leaves
+# nbModel <- CoreModel("Readmit", train, model="tree", modelType=4)
+# #print(nbModel)
+# 
+# # prediction on test set
+# pred <- predict(nbModel, test, type="class")
+# # mEval <- modelEval(nbModel, test$Readmit, pred)
+# # print(mEval) # evaluation of the model
+# 
+# test$pred_readmit <- pred
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+# confusionMatrix(test$pred_readmit, test$Readmit)
+
+#Accuracy : 0.949  
+
+```
+
+SVM
+
+```{r}
+
+# SVMmodel <- svm(Readmit~ .,
+#                 data=train, kernel = "linear")
+# print(SVMmodel)
+# summary(SVMmodel)
+# x <- select(test, -Readmit)
+# y <- select(test, Readmit)
+# pred <- predict(SVMmodel, x)
+# test$pred_readmit <- pred
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+# confusionMatrix(test$pred_readmit, test$Readmit)
+
+# Accuracy : 0.9505 
+```
+
+Neural Networks
+
+```{r}
+# nnet_model <- nnet(formula = Readmit ~ ., data=train, size = 10, maxit = 100)
+# 
+# test$pred_readmit <- predict(nnet_model, test, type = "class")
+# test$pred_readmit = as.factor(test$pred_readmit)
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+# 
+# #summary(nnet_model)
+# 
+# confusionMatrix(test$pred_readmit, test$Readmit)
+# Accuracy : 0.9499
+
+```
+
+Rpart Tree
+
+```{r}
+# rpart_tree <- rpart(formula = Readmit ~ ., 
+#                     data=train, method = 'class')
+# summary(rpart_tree)
+# 
+# test$pred_readmit <- predict(rpart_tree, test, type="class")
+# table(predict(rpart_tree, test, type="class"), test$Readmit)
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+# 
+# confusionMatrix(test$pred_readmit, test$Readmit)
+
+# Accuracy : 0.9505
+
+```
+
+KNN
+
+```{r}
+# KNN
+# knnModel <- CoreModel(Readmit ~ .,
+#                       data=train, model="knn", kInNN = 5)
+# print(knnModel)
+# 
+# # prediction on test set
+# pred <- predict(knnModel, test, type="class")
+# mEval <- modelEval(knnModel, test$Readmit, pred)
+# print(mEval) # evaluation of the model
+# #$accuracy 0.5122691
+# #$AUC 0.524898
+# 
+# test$pred_readmit <- pred
+# prop.table(table(test$Readmit, test$pred_readmit),1)
+# confusionMatrix(test$pred_readmit, test$Readmit)
+
+#Accuracy : 0.9474
+
+```
+
