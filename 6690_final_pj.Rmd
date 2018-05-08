@@ -4,7 +4,7 @@ output: pdf_document
 ---
 
 Notice: This work is the final project of course EECS E6690 TPC: Statistical Learning in Bio & Info System. 
-Prof. Predrag R. Jelenkovi ??c. Instructors: Ludwig Zhao, Tingkai Liu.
+Prof. Predrag R. Jelenkovic. Instructors: Ludwig Zhao, Tingkai Liu.
 
 This work aims to reproduce the result in article: Beata Strack,1 Jonathan P. DeShazo  Impact of HbA1c Measurement on Hospital Readmission Rates: Analysis of 70,000 Clinical Database Patient Records, 2014. Print. Major part includes training, evaluating and improving a logistic model. Some statistical graphs are then generated for analysis purpose. 
 
