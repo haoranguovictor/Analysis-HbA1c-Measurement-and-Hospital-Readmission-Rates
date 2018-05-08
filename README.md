@@ -6,3 +6,5 @@ Tools: R (R Studio), SQL
 Course EECS6690 of Columbia University, final project, see the source code (Rmd) or PDF file for more details.
 
 Original Paper: Beata Strack,1 Jonathan P. DeShazo  Impact of HbA1c Measurement on Hospital Readmission Rates: Analysis of 70,000 Clinical Database Patient Records, 2014. Print. https://www.hindawi.com/journals/bmri/2014/781670/
+
+Original Data Set: Diabetes 130-US hospitals for years 1999-2008 Data Set https://archive.ics.uci.edu/ml/datasets/Diabetes+130-US+hospitals+for+years+1999-2008#
