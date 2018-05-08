@@ -591,6 +591,11 @@ for (i in 1:5 ){
 ```
 
 ```{r}
+summary(data2)
+```
+
+
+```{r}
 A02 = plot_data2[[1]]
 B02 = plot_data2[[2]]
 C02 = plot_data2[[3]]
@@ -642,6 +647,66 @@ arrows(l,lwr_data2[[5]],l,upr_data2[[5]],code=3,col="purple",lwd=lr,length= 0.05
 
 grid()
 ```
+
+```{r}
+time_hos = 4.3
+Diag_list = list("Diabetes","Musculoskeletal","Genitourinary","Neoplasms","Injury")
+Readmit_list = list("None","Norm","High&Ch","High&Not")
+
+TEST2 = list(list(),list(),list(),list(),list())
+for (i in 1:5) {
+  for (j in 1:4){
+    temp = data.frame( "Medical_speciality" = "Cardiology" , "Age_" = as.factor("[60, 100)"), "race_" = ("AfricanAmerican") , "Admission" = ("Emergency"), "Discharge" = ("Other"),"Reaction" = Readmit_list[j] , "Pri_diag" = Diag_list[i], "time_in_hospital" = time_hos)
+    TEST2[[i]][[j]] = temp
+    colnames(TEST2[[i]][[j]]) <- c("Medical_speciality","Age_","race_","Admission","Discharge","Reaction","Pri_diag","time_in_hospital")
+  }
+}
+
+critval <- 1.96 ## approx 95% CI
+plot_data2 = list(c(),c(),c(),c(),c())
+upr_data2 = list(c(),c(),c(),c(),c())
+lwr_data2 = list(c(),c(),c(),c(),c())
+for (i in 1:5 ){
+  for (j in 1:4 ){
+    temp = predict(linModel_core_num, TEST2[[i]][[j]], type="response",se.fit = TRUE)
+    plot_data2[[i]][j] = temp$fit
+    upr_data2[[i]][j] = temp$fit + (critval * temp$se.fit)
+    lwr_data2[[i]][j] = temp$fit - (critval * temp$se.fit)
+  }
+}
+```
+
+```{r}
+A02 = plot_data2[[1]]
+B02 = plot_data2[[2]]
+C02 = plot_data2[[3]]
+D02 = plot_data2[[4]]
+E02 = plot_data2[[5]]
+lr = 1
+
+plot( l,A02,ann=F , type="b", ylim = c(0.01, 0.25),col="blue",lwd=lr,pch=20,cex=1.5, xaxt="n")
+title(ylab = 'Probability of readmission')
+mtext("None",side=1,at=0,line=0.5)
+mtext("Normal",side=1,at=1,line=0.5)
+mtext("High&Ch",side=1,at=2,line=0.5)
+mtext("High&Not",side=1,at=2.9,line=0.5)
+lines(l,B02,type = "b",col="green",lwd=lr,pch=20,cex=1.5)
+lines(l,C02,type = "b",col="red",lwd=lr,pch=20,cex=1.5)
+lines(l,D02,type = "b",col="orange",lwd=lr,pch=20,cex=1.5)
+lines(l,E02,type = "b",col="purple",lwd=lr,pch=20,cex=1.5)
+
+legend(2.1,0.255, c("Diabetes","Musculoskeletal","Genitourinary","Neoplasms","Injury"), col = c("blue", "green", "red","orange","purple"), pch = c(15,15,15) ,cex=0.95)
+arrows(l,lwr_data2[[1]],l,upr_data2[[1]],code=3,col="blue",lwd=lr,length= 0.05,angle=90)
+arrows(l,lwr_data2[[2]],l,upr_data2[[2]],code=3,col="green",lwd=lr,length= 0.05,angle=90)
+arrows(l,lwr_data2[[3]],l,upr_data2[[3]],code=3,col="red",lwd=lr,length= 0.05,angle=90)
+arrows(l,lwr_data2[[4]],l,upr_data2[[4]],code=3,col="orange",lwd=lr,length= 0.05,angle=90)
+arrows(l,lwr_data2[[5]],l,upr_data2[[5]],code=3,col="purple",lwd=lr,length= 0.05,angle=90)
+
+grid()
+```
+
+
+
 
 Test and Other Methods
 
